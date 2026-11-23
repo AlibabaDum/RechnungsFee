@@ -7,6 +7,13 @@ Versionen werden durch Git-Tags gesetzt – `git tag v0.x.y && git push --tags`.
 
 ---
 
+## [Unreleased]
+
+### ✨ Neu
+- **Zusatz-Werkzeug `werkzeug/rechnung-buchen`**: eigenständiges Desktop-Programm (PySide6), das ein PDF mit mehreren Rechnungen (auch Scans) per Offline-OCR (PyMuPDF 300 dpi + RapidOCR/ONNX, ohne Tesseract und ohne Internet) in eine korrigierbare Buchungsliste mit SKR03-Konten-Dropdowns wandelt und als CSV exportiert; merkt sich Konten pro Lieferant und prüft netto + USt = brutto. Eigene `requirements.txt`, läuft ohne FastAPI-Backend und ohne Datenbank. Beschreibung und geänderte Dateien: `werkzeug/rechnung-buchen/README.md` bzw. `ANDERUNGEN.md`
+
+---
+
 ## [v0.3.29] – Juni 2026
 
 ### ✨ Neu

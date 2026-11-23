@@ -103,6 +103,14 @@ Installierte Apps aktualisieren sich automatisch – beim nächsten Start ersche
 
 ---
 
+## 🧰 Zusatz-Werkzeuge
+
+Neben der App gibt es im Repo eigene kleine Programme, die für sich laufen (eigene Python-Umgebung, ohne Backend und Datenbank):
+
+- **[rechnung-buchen](werkzeug/rechnung-buchen)** – ein PDF mit mehreren (auch gescannten) Rechnungen wird per Offline-OCR gelesen, erscheint als korrigierbare Buchungsliste mit SKR03-Konten-Dropdowns und wird als CSV exportiert. Braucht kein Tesseract und kein Internet.
+
+---
+
 ## 🗺️ Roadmap
 
 Die aktuelle Roadmap mit allen abgeschlossenen und geplanten Features findest du in [docs/ROADMAP.md](docs/ROADMAP.md).

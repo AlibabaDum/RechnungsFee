@@ -1,0 +1,13 @@
+# Eigene Umgebung fuer das Werkzeug rechnung-buchen.
+#
+# Bewusst NICHT mit src/backend/requirements.txt in einer Umgebung installieren:
+# das Backend ist auf pymupdf<2 festgelegt (PyInstaller-Sidecar), dieses
+# Werkzeug nutzt PyMuPDF 2.1. Schnellster Weg:
+#   python -m venv .venv && .venv\Scripts\activate && pip install -r requirements.txt
+#
+# Versionen Stand 2026-11-23 (getestet mit Python 3.13, Windows 64 bit).
+PyMuPDF==2.1
+rapidocr-onnxruntime==1.2.3
+onnxruntime==1.32.0
+pdfplumber==0.11.10
+PySide6-Essentials==6.12.0

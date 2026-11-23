@@ -1,0 +1,12 @@
+# Locales vom Werkzeug rechnung-buchen - enthaelt personenbezogene Daten oder
+# ist installierbar und gehoert deshalb nicht ins Repo.
+konten.json
+.cache/
+letzter Fehler.txt
+*.csv
+belege*.json
+python/
+libs/
+.venv/
+__pycache__/
+*.pyc
