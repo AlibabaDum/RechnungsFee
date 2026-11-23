@@ -250,6 +250,37 @@ npm run tauri build
 
 Voraussetzung: Rust + Cargo installiert (`rustup.rs`), Tauri-Abhängigkeiten je nach OS (siehe [Tauri-Docs](https://tauri.app/start/prerequisites/)).
 
+### Tauri-App unter Windows bauen (am 23.11.2026 so durchgelaufen)
+
+```powershell
+# 1) Python-Sidecar (PyInstaller) → src-tauri\binaries\backend-<triple>.exe
+#    (das Skript startet danach den Selbsttest des Binaries und bricht bei Fehlern ab)
+pwsh scripts\build-sidecar.ps1
+
+# 2) Tauri-CLI – steht in keiner package.json, also lokal holen
+npm install --no-save --no-package-lock "@tauri-apps/cli@^2"
+
+# 3) App und Installer (baut über beforeBuildCommand auch das Frontend)
+npx tauri build
+```
+
+Ausgabe: `src-tauri\target\release\bundle\nsis\RechnungsFee_<Version>_x64-setup.exe` – zurzeit rund
+**173 MB**, davon 165 MB Sidecar. Der Beleg-Sammelimport (`docs/16-beleg-sammelimport.md`) bringt
+onnxruntime, OpenCV und die RapidOCR-Modelle mit; ohne ihn wäre das Sidecar deutlich kleiner.
+
+Zwei Stolpersteine auf Windows-Rechnern ohne vollständiges Windows-SDK:
+
+- **rc.exe fehlt**: `tauri-winres` übersetzt die erzeugte `resource.rc` mit dem
+  Resource-Compiler des SDK. Meldet der Bau `Failed("Are you sure you have RC.EXE in your
+  $PATH…")`, hilft ein vorhandener Compiler, zum Beispiel
+  `$env:RC = 'C:\Program Files (x86)\Windows Kits\8.1\bin\x64\rc.exe'` – die Datei braucht keine
+  Header, das funktioniert. Sauberer ist aber, über die Visual-Studio-Installer die
+  Windows-SDK-Komponente nachzuinstallieren.
+- **`NativeCommandError` beim Sidecar-Bau**: `build-sidecar.ps1` setzt
+  `$ErrorActionPreference = "Stop"`, und PyInstaller schreibt Meldungen über stderr. Wer den Aufruf
+  mit `2>&1` zusammenfasst, bekommt einen Abbruch, obwohl der Bau durchläuft – Ausgaben stattdessen
+  in Dateien umleiten (`cmd /c "… > out.txt 2> err.txt"`).
+
 ---
 
 ## ⚖️ Lizenz-Hinweis für Beiträge

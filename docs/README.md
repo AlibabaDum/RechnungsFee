@@ -35,6 +35,7 @@ Diese Dokumentation beschreibt alle Anforderungen, Konzepte und Entscheidungen f
 |----------|--------------|-----------|
 | **[06-stammdaten.md](06-stammdaten.md)** | Unternehmerdaten, Kunden, Lieferanten, Ersteinrichtung | Kategorie 8 |
 | **[08-import.md](08-import.md)** | Import aus Fakturama, hellocash, Rechnungsassistent | Kategorie 9 |
+| **[16-beleg-sammelimport.md](16-beleg-sammelimport.md)** | Sammel-PDF mit vielen Belegen → Offline-OCR, korrigierbare Liste, CSV mit Buchungssätzen | Kategorie 2 |
 
 ### 🔐 Sicherheit & Wartung
 

@@ -12,9 +12,16 @@ Versionen werden durch Git-Tags gesetzt – `git tag v0.x.y && git push --tags`.
 ### ✨ Neu
 - **Zusatz-Werkzeug `werkzeug/rechnung-buchen`**: eigenständiges Desktop-Programm (PySide6), das ein PDF mit mehreren Rechnungen (auch Scans) per Offline-OCR (PyMuPDF 300 dpi + RapidOCR/ONNX, ohne Tesseract und ohne Internet) in eine korrigierbare Buchungsliste mit SKR03-Konten-Dropdowns wandelt und als CSV exportiert; merkt sich Konten pro Lieferant und prüft netto + USt = brutto. Eigene `requirements.txt`, läuft ohne FastAPI-Backend und ohne Datenbank. Beschreibung und geänderte Dateien: `werkzeug/rechnung-buchen/README.md` bzw. `ANDERUNGEN.md`
 
+### ✨ Neu
+- **Beleg-Sammelimport in der App** (Menü „Buchhaltung → Beleg-Import", Route `/beleg-import`): ein PDF mit vielen Belegen – Sammel-Download vom Online-Händler, Kreditkarten-Belegordner – wird offline erkannt (PyMuPDF 300 dpi + RapidOCR/ONNX, ohne Tesseract und ohne Internet) und in eine korrigierbare Liste zerlegt: Seitenangaben, erkannte Dubletten, Prüfung „netto + USt = brutto", Detailansicht je Beleg, Zwischenspeicher für bereits erkannten Text. Die Konten-Dropdowns stammen aus dem eigenen Kontenrahmen der Firma (`Unternehmen.kontenrahmen` SKR03/SKR04/SKR49: aktive Aufwand-Konten aus `Kategorie`, Kreditoren aus `Lieferant.kreditor_nr`), der Lieferantenname wird unscharf gegen die Stammdaten gematcht, und eine Korrektur wird pro Lieferantennamen gemerkt (Liste der gemerkten Zuordnungen + „Lernen zurücksetzen"). Export als CSV mit Buchungssätzen (Semikolon, Dezimalkomma, UTF-8 BOM). Neu: `src/backend/api/beleg_sammelimport.py`, `src/backend/utils/beleg_ocr/`, `src/frontend/src/pages/beleg-sammelimport/BelegSammelImportPage.tsx`, 15 Tests in `src/backend/tests/test_beleg_sammelimport.py`
+- OCR-Pakete jetzt regulär im Backend: `rapidocr-onnxruntime==1.2.3` und `onnxruntime==1.32.0` in `src/backend/requirements.txt` (`pymupdf<2` bleibt getrennt halten)
+
+### 📦 Build
+- `scripts/build-sidecar.ps1` nimmt die Belegerkennung mit (`--collect-all rapidocr_onnxruntime`, `--collect-all onnxruntime`, `--collect-all pymupdf`, Hidden-Importe für `utils.beleg_ocr.*` und `cv2`/`numpy`); `main.py --selbsttest` baut die OCR-Engine im fertigen Bundle auf, damit fehlende Modell-Dateien schon im Build auffallen. Das Sidecar wird dadurch messbar größer: 165 MB Sidecar, 172,9 MB NSIS-Installer (gemessen am 23.11.2026, Windows x64).
+- Neue Seite im Frontend: `src/frontend/src/api/client.ts` (Typen + 6 Funktionen), Route in `src/frontend/src/App.tsx`, Menüeintrag in `src/frontend/src/components/AppLayout.tsx`
+
 ---
 
-## [v0.3.29] – Juni 2026
 
 ### ✨ Neu
 - Kundenstamm: Dokumente hinterlegen (Verträge, Bescheinigungen §4 Nr. 21 UStG, Handelsregisterauszug, Gewerbeschein, Personalausweiskopie u. v. m.) – Upload, Inline-Vorschau, Umbenennen, Löschen; erreichbar über Tab „Dokumente" im Kunden-Detail-Panel

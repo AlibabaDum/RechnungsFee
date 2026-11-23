@@ -100,6 +100,7 @@ Installierte Apps aktualisieren sich automatisch – beim nächsten Start ersche
 - **Kontext-Hilfe** mit ℹ-Tooltips für GoBD-Konzepte, Steuerfelder und Rechnungslogik
 - **Auto-Updater** – neue Versionen werden direkt in der App angeboten
 - **Offline-first** – alle Daten bleiben lokal auf deinem Rechner
+- **Beleg-Sammelimport** (Menü „Buchhaltung → Beleg-Import") – ein PDF mit vielen Belegen (Sammel-Download vom Online-Händler, Kreditkarten-Belegordner) wird offline erkannt (PyMuPDF 300 dpi + RapidOCR, ohne Tesseract und ohne Internet), erscheint als korrigierbare Liste inklusive Dubletten-Prüfung, mit Konten aus dem eigenen Kontenrahmen, und wird als CSV mit Buchungssätzen exportiert. Eine Korrektur wird pro Lieferant gemerkt. Beschreibung: [docs/16-beleg-sammelimport.md](docs/16-beleg-sammelimport.md)
 
 ---
 
@@ -107,7 +108,7 @@ Installierte Apps aktualisieren sich automatisch – beim nächsten Start ersche
 
 Neben der App gibt es im Repo eigene kleine Programme, die für sich laufen (eigene Python-Umgebung, ohne Backend und Datenbank):
 
-- **[rechnung-buchen](werkzeug/rechnung-buchen)** – ein PDF mit mehreren (auch gescannten) Rechnungen wird per Offline-OCR gelesen, erscheint als korrigierbare Buchungsliste mit SKR03-Konten-Dropdowns und wird als CSV exportiert. Braucht kein Tesseract und kein Internet.
+- **[rechnung-buchen](werkzeug/rechnung-buchen)** – ein PDF mit mehreren (auch gescannten) Rechnungen wird per Offline-OCR gelesen, erscheint als korrigierbare Buchungsliste mit SKR03-Konten-Dropdowns und wird als CSV exportiert. Braucht kein Tesseract und kein Internet. Derselbe Erkennungs-Kern läuft jetzt auch in der App („Buchhaltung → Beleg-Import", mit Konten aus der Datenbank statt der festen SKR03-Liste).
 
 ---
 

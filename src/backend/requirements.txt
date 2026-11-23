@@ -18,6 +18,12 @@ pdfplumber
 pymupdf<2
 pytesseract
 ocrmypdf
+# Beleg-Sammelimport: eigene Offline-Texterkennung (PDF seitenweise rendern + RapidOCR).
+# Läuft ohne Tesseract-Installation auf dem Rechner der Nutzenden; die Erkennungsmodelle
+# stecken direkt im Paket, deshalb sammelt der Sidecar-Bau rapidocr_onnxruntime und
+# onnxruntime vollständig ein (siehe scripts/build-sidecar.ps1).
+rapidocr-onnxruntime==1.2.3
+onnxruntime==1.32.0
 markdown
 cryptography
 # Security-Audit F6: Zugangsdaten im Schlüsselbund des Betriebssystems (Windows Credential Manager,

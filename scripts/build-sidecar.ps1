@@ -66,6 +66,7 @@ try {
         --hidden-import api.rechnungen `
         --hidden-import api.backup `
         --hidden-import api.pdf_vorlagen `
+        --hidden-import api.beleg_sammelimport `
         --hidden-import database.models `
         --hidden-import database.connection `
         --hidden-import database.seed `
@@ -94,6 +95,20 @@ try {
         --hidden-import pytesseract `
         --hidden-import utils.rechnungs_parser `
         --hidden-import utils.pdfa_konverter `
+        --hidden-import utils.beleg_ocr.ocr `
+        --hidden-import utils.beleg_ocr.pipeline `
+        --hidden-import utils.beleg_ocr.konten `
+        --hidden-import utils.beleg_ocr.csv_export `
+        --hidden-import utils.beleg_ocr.profiles `
+        --hidden-import utils.beleg_ocr.grouping `
+        --hidden-import utils.beleg_ocr.extract `
+        --hidden-import utils.beleg_ocr.fields `
+        --hidden-import utils.beleg_ocr.model `
+        --hidden-import cv2 `
+        --hidden-import numpy `
+        --collect-all rapidocr_onnxruntime `
+        --collect-all onnxruntime `
+        --collect-all pymupdf `
         "--add-data=$BackendDir\fonts;fonts" `
         main.py
 } finally {

@@ -35,7 +35,7 @@ logging.root.setLevel(logging.INFO)
 logging.root.addHandler(_log_handler)
 # ─────────────────────────────────────────────────────────────────────────────
 from database.seed import run_all_seeds, DURCHLAUFENDE_POSTEN_BESCHREIBUNG
-from api import unternehmen, konten, kategorien, setup, journal, kunden, lieferanten, tagesabschluss, nummernkreise, export, rechnungen, backup, artikel, artikel_gruppen, ust_saetze, pdf_vorlagen, eks, system, ustva, zm, euer, dokumentenpakete, mail, wiederkehrend, buchungsvorlagen, anlageverzeichnis, datev, anlage_s, anlage_g, fristen_api, guv, bank_templates, bank_import, auto_filter, forderungen, cockpit, datenmigration, kontenuebersicht, schnellbuchungen, mahnwesen, profile, kontokorrent, inventurliste, postfach, rechnungen_import
+from api import unternehmen, konten, kategorien, setup, journal, kunden, lieferanten, tagesabschluss, nummernkreise, export, rechnungen, backup, artikel, artikel_gruppen, ust_saetze, pdf_vorlagen, eks, system, ustva, zm, euer, dokumentenpakete, mail, wiederkehrend, buchungsvorlagen, anlageverzeichnis, datev, anlage_s, anlage_g, fristen_api, guv, bank_templates, bank_import, auto_filter, forderungen, cockpit, datenmigration, kontenuebersicht, schnellbuchungen, mahnwesen, profile, kontokorrent, inventurliste, postfach, rechnungen_import, beleg_sammelimport
 
 SCHEMA_VERSION = 195
 
@@ -134,6 +134,7 @@ app.include_router(cockpit.router)
 app.include_router(datenmigration.router)
 app.include_router(mahnwesen.router)
 app.include_router(rechnungen_import.router)
+app.include_router(beleg_sammelimport.router)
 
 
 @app.post("/api/shutdown")
@@ -5099,6 +5100,14 @@ if __name__ == "__main__":
             import certifi
             assert Path(certifi.where()).exists(), "certifi-Bundle fehlt"
             import pypdf, pdfplumber, fpdf, facturx, segno, pytesseract, resvg_py  # noqa: F401
+            # Beleg-Sammelimport: die Texterkennung für Sammel-PDFs (rapidocr_onnxruntime)
+            # bringt ihre ONNX-Modelle als Datendateien mit, und cv2/numpy kommen als
+            # Native-Bibliotheken. Beides fehlt im Sidecar, wenn es nicht mitgenommen
+            # wurde – dann würde erst der erste Belegordner beim Nutzer fehlschlagen.
+            from utils.beleg_ocr.ocr import _engine as als_belegerkennung  # noqa: F401
+            from utils.beleg_ocr.pipeline import belege_aus_pdf  # noqa: F401
+            from utils.beleg_ocr.csv_export import csv_text  # noqa: F401
+            assert als_belegerkennung() is not None, "Modelle der Belegerkennung fehlen"
             print(f"[Selbsttest] ok (PyMuPDF {fitz.VersionBind})")
             sys.exit(0)
         except Exception:

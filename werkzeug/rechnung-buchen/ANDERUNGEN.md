@@ -116,3 +116,45 @@ auf `Rechnung buchen.vbs` ohne weitere Installation.
   Ordner hier fängt bei den Standardkonten 3400 / 70001 an.
 - Zum Mitnehmen auf einen anderen Rechner: den ganzen Ordner inklusive `python\`
   kopieren (oder nur den Quelltext und dort die Pakete installieren).
+
+## 7. Noch am 23.11.2026: dieselbe Erkennung jetzt in der App (RechnungsFee)
+
+Auf Wunsch wurde die Belegerkennung **zusätzlich** in das eigentliche Programm
+eingebaut – dieser Ordner hier bleibt unverändert liegen und funktioniert weiter
+(auch `E:\Buchen` wurde nicht angefasst). Beschreibung der neuen Seite:
+[`docs/16-beleg-sammelimport.md`](../../docs/16-beleg-sammelimport.md).
+
+| Datei | Inhalt |
+|---|---|
+| `src/backend/utils/beleg_ocr/` | die Engine aus diesem Ordner (`ocr`, `pipeline`, `extract`, `fields`, `grouping`, `model`, `profiles`, `konten`, `csv_export`), ohne `gui.py`/`cli.py`/`datev.py` |
+| `src/backend/api/beleg_sammelimport.py` | neuer Router `/api/beleg-sammelimport` (lesen, csv, listen, merken, zuruecksetzen, caches) |
+| `src/backend/main.py` | Router eingetragen; `--selbsttest` prüft jetzt auch die OCR-Modelle im fertigen Sidecar |
+| `src/backend/requirements.txt` | `rapidocr-onnxruntime==1.2.3`, `onnxruntime==1.32.0` |
+| `src/backend/tests/test_beleg_sammelimport.py` | 15 neue Tests |
+| `src/frontend/src/pages/beleg-sammelimport/BelegSammelImportPage.tsx` | neue Seite „Beleg-Import" (Hochladen/Ziehen, Tabelle zum Korrigieren, gemerkte Zuordnungen) |
+| `src/frontend/src/api/client.ts`, `src/App.tsx`, `src/components/AppLayout.tsx` | Typen + 6 Aufrufe, Route `/beleg-import`, Menüeintrag unter „Buchhaltung" |
+| `scripts/build-sidecar.ps1` | nimmt OCR-Bibliotheken und -Modelle ins PyInstaller-Bundle auf |
+
+Anders als in der eigenständigen Version:
+
+1. **Konten aus der Datenbank** statt der festen SKR03-Liste: Aufwandskonten aus den
+   aktiven Kategorien passend zu `Unternehmen.kontenrahmen` (SKR03/SKR04/SKR49),
+   Kreditoren aus `Lieferant.kreditor_nr`. Der Recognizer-Rahmen wird also je Firma
+   richtig gesetzt, nicht hart eingetragen.
+2. **Standard-Kreditor wird ersetzt**: die Engine trägt als Haben `70001`
+   („div. Lieferanten") ein. Die App ersetzt diese Nummer durch das echte
+   Kreditorenkonto aus den Stammdaten, wenn der Name eindeutig passt
+   (`GRUND_KREDITOR` in `api/beleg_sammelimport.py`).
+3. **Lernen liegt im Profildatenordner** (`beleg_ocr/konten.json` daneben den
+   PDFs und dem OCR-Zwischenspeicher), nicht neben dem Programm – die
+   App-Datenbank bleibt unverändert, es gibt keine Migration und kein Feature-Flag.
+4. **Kein DATEV-Export und keine Direktbuchung ins Journal** – CSV wie hier;
+   der Schritt „CSV → Journal" nutzt den vorhandenen Import.
+5. Der Selftest des Sidecars (`main.py --selbsttest`) wurde erweitert, weil
+   RapidOCR-Modelle Datendateien sind: ohne `--collect-all rapidocr_onnxruntime`
+   würde der erste Sammel-ORDNER beim Nutzer fehlschlagen. Preis: das Sidecar ist
+   jetzt 165 MB groß, der gebaute Installer 172,9 MB.
+
+Nachgewiesen am 23.11.2026: `pytest tests/test_beleg_sammelimport.py` 15 passed,
+gesamte Backend-Suite ohne neuen Fehler (vorher wie nachher ein bereits bekannter
+Schlüsselbund-Test), `npx tsc --noEmit` ohne Fehler.

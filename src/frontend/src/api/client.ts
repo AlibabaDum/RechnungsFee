@@ -3661,3 +3661,110 @@ export async function downloadMahnungPdfForMail(mahnungId: number): Promise<void
   const match = cd.match(/filename[*]?=(?:UTF-8''|"?)([^";\r\n]+)/i)
   await _triggerBlobDownload(blob, match?.[1]?.trim() ?? 'mahnung.pdf')
 }
+
+// --- Beleg-Sammelimport: ein PDF mit vielen Rechnungen/Kaufbelegen ---
+// Die Texterkennung läuft vollständig auf diesem Rechner (kein Hochladen). Beim ersten
+// Lesen braucht sie pro Seite einige Sekunden; danach liegt der Text im Cache desselben
+// Programms und dasselbe PDF ist in Sekunden durch.
+
+export type BelegKonto = { nr: string; text: string }
+export type BelegGelernt = { name: string; sach: string; kreditor: string }
+
+/** Eine Zeile der Korrekturliste – Felder wie im Formular, alles bearbeitbar außer Seitenzahl
+ *  und Dubletten-Markierung. Beträge kommen als Text mit Punkt, die CSV später mit Komma. */
+export type BelegZeile = {
+  seiten: number[]
+  profil: string
+  grund: string
+  duplizat_von: number | null
+  lieferant: string
+  belegdatum: string
+  leistungsdatum: string
+  rechnungsnummer: string
+  bestellnummer: string
+  netto: string
+  ust_satz: number | null
+  ust_betrag: string
+  brutto: string
+  waehrung: string
+  soll_konto: string
+  soll_konto_vorschlag: string
+  haben_konto: string
+  haben_konto_vorschlag: string
+  ust_konto: string
+  belegfeld1: string
+  text: string
+  zahlungsart: string
+  flag: string[]
+  vertrauen: Record<string, number>
+  pruefung: string
+  konfidenz: number
+}
+
+export type BelegLeseErgebnis = {
+  dateiname: string
+  seitenzahl: number
+  belege: number
+  buchbar: number
+  dubletten: number
+  kontenrahmen: string
+  dauer_sekunden: number
+  zeilen: BelegZeile[]
+  sachkonten: BelegKonto[]
+  kreditorkonten: BelegKonto[]
+  gelernt: BelegGelernt[]
+  hinweis: string
+}
+
+export type BelegListen = {
+  kontenrahmen: string
+  sachkonten: BelegKonto[]
+  kreditorkonten: BelegKonto[]
+  gelernt: BelegGelernt[]
+  hinweis: string
+}
+
+/** Liest ein gesammeltes Beleg-PDF und liefert die korrigierbare Liste samt Dropdown-Konten. */
+export const leseBelegPdf = (datei: File) => {
+  const form = new FormData()
+  form.append('datei', datei)
+  return request<BelegLeseErgebnis>('/beleg-sammelimport/lesen', { method: 'POST', body: form })
+}
+
+/** Dropdown-Inhalte und gemerkte Konten ohne neuen OCR-Lauf (fürs Formular beim Blättern). */
+export const getBelegListen = () => request<BelegListen>('/beleg-sammelimport/listen')
+
+/** Die (korrigierte) Liste als CSV mit Buchungssätzen herunterladen: Semikolon, Kommazahlen,
+ *  UTF-8 mit BOM – funktioniert direkt in Excel und ist die Grundlage für weitere Exporte. */
+export async function downloadBelegCsv(
+  zeilen: BelegZeile[], dateiname: string, nurBuchbare = true,
+): Promise<void> {
+  const base = await getBaseUrl()
+  const res = await apiFetch(`${base}/beleg-sammelimport/csv`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ zeilen, nur_buchbare: nurBuchbare, dateiname }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(String(err.detail ?? 'CSV konnte nicht erstellt werden'))
+  }
+  const blob = await res.blob()
+  const cd = res.headers.get('Content-Disposition') ?? ''
+  const match = cd.match(/filename[*]?=(?:UTF-8''|"?)([^";\r\n]+)/i)
+  await _triggerBlobDownload(blob, match?.[1]?.trim() ?? `${dateiname}_buchungen.csv`)
+}
+
+/** Merkt ein Konto zu einem Lieferantennamen und gilt für alle künftigen PDFs mit diesem Namen. */
+export const merkBelegKonto = (name: string, sach: string, kreditor: string) =>
+  request<{ gelernt: BelegGelernt[] }>('/beleg-sammelimport/merken', {
+    method: 'POST', body: JSON.stringify({ name, sach, kreditor }),
+  })
+
+/** Alle gemerkten Zuordnungen löschen (nichts anderes wird angefasst). */
+export const setzeBelegLernenZurueck = () =>
+  request<{ geloescht: number; gelernt: BelegGelernt[] }>('/beleg-sammelimport/zuruecksetzen', { method: 'POST' })
+
+/** Wie viele PDFs schon erkannt sind und wo der Ordner liegt (zum Aufräumen). */
+export const getBelegCacheInfo = () =>
+  request<{ ordner: string; gefundene_pdfs: number; groesse_kb: number }>('/beleg-sammelimport/caches')

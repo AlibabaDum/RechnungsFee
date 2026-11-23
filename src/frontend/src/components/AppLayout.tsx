@@ -27,6 +27,9 @@ const buchhaltungNavBase = [
 
 const buchhaltungNavOptional: { to: string; label: string; icon: string; zeigen: (u: Unternehmen | undefined) => boolean }[] = [
   { to: '/bank-import', label: 'Bank-Import', icon: 'account_balance', zeigen: (u) => !!u?.bank_import_aktiv },
+  // Ein PDF mit vielen Belegen → korrigierbare Liste → CSV mit Buchungssätzen. Immer sichtbar:
+  // das braucht keine Einstellung, nur eine Datei.
+  { to: '/beleg-import', label: 'Beleg-Import', icon: 'library_books', zeigen: () => true },
 ]
 
 import type { Unternehmen, ZMPruefung } from '../api/client'
