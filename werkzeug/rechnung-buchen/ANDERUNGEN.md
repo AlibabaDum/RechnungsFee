@@ -185,3 +185,26 @@ Das Werkzeug in diesem Ordner bleibt bei seiner CSV – es hat kein Journal.
 Nachgewiesen am 23.11.2026: `pytest tests/test_beleg_sammelimport.py` 23 passed,
 gesamte Backend-Suite 1440 passed / 1 bekannter Schlüsselbund-Test / 4 skipped,
 `npx tsc --noEmit` ohne Fehler.
+
+## 9. Noch am 23.11.2026: eigenes Repo „Belegerkennung", README berichtigt
+
+Das eigenständige Programm liegt jetzt zusätzlich als eigener GitHub-Ordner
+[AlibabaDum/Belegerkennung](https://github.com/AlibabaDum/Belegerkennung):
+derselbe Quelltext aus diesem Ordner (Prüfsummen verglichen, inhaltlich identisch),
+dazu README, Anleitung, dieses Protokoll, `requirements.txt` und beide Startdateien.
+Lizenz **AGPL-3.0** (`LICENSE`, amtlicher Text von gnu.org) – wie RechnungsFee.
+**Hauptversion bleibt dieser Ordner**, der andere Repo ist der fertige Stand zum
+Herunterladen; beides steht jetzt jeweils im eigenen README.
+
+Nicht mit hochgeladen: echte Beleg-PDFs, `konten.json`, `.cache/`, erzeugte
+CSV-Dateien, Beispiel-Screenshots und die rund 457 MB Python-Laufzeit. In dem
+anderen Repo sind zusätzlich `*.pdf` und `beispiele/` in der `.gitignore`, damit
+kein Beleg versehentlich mitgeht. Nachgesehen an der Dateiliste des GitHub-Ordners:
+21 Dateien, rund 0,1 MB, kein Beleg und kein Zwischenspeicher dabei. Frisch
+geklont und ausprobiert: Kommandozeile mit `--help` und die Bildschirmliste laufen
+mit der Python-Umgebung aus `E:\Buchen`.
+
+Berichtigt im README hier: es behauptete, der `python\`-Ordner sei „in diesem
+Repo-Ordner schon vorhanden". Er steht aber in der `.gitignore` und fehlt deshalb
+nach jedem Klonen – jetzt steht dort, wie er gebaut wird oder wie Variante B mit
+eigener Umgebung funktioniert.

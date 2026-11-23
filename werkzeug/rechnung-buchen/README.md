@@ -6,8 +6,13 @@ steht eine CSV mit Buchungssätzen (SKR03).
 
 Das Werkzeug läuft **vollständig für sich** – eigener Startknopf, eigene
 Python-Umgebung, kein Kontakt zu FastAPI-Backend, Datenbank oder Frontend von
-RechnungsFee. Es ist bewusst als eigener Ordner im Repo abgelegt, damit der
-Quelltext an einer Stelle liegt, ohne Teil der Desktop-App zu sein.
+RechnungsFee. Dieser Ordner ist die **Hauptversion des eigenständigen
+Werkzeugs** – Änderungen hier zuerst, und die Kopie für die App in
+`src/backend/utils/beleg_ocr/` wird nachgezogen. Ein baugleicher Stand liegt als
+eigenes Repo
+[Belegerkennung](https://github.com/AlibabaDum/Belegerkennung) (AGPL-3.0) zum
+Herunterladen bereit. Zusätzlich ist dieselbe Erkennung in dieser App als Seite
+„Buchhaltung → Beleg-Import" eingebaut und bucht dort direkt ins Journal.
 
 ## Was es kann
 
@@ -39,10 +44,11 @@ Quelltext an einer Stelle liegt, ohne Teil der Desktop-App zu sein.
 **A) Portable (kein installiertes Python nötig)**: In einem Ordner, der den
 Unterordner `python\` enthält (eingebettetes Python 3.13 mit den Paketen aus
 `requirements.txt`), doppelklicke `Rechnung buchen.vbs` (ohne Konsole) oder
-`Rechnung buchen (mit Konsole).bat`. In diesem Repo-Ordner ist `python\` schon
-vorhanden (457 MB, deshalb nicht mit gecommittet) – hier also einfach
-`Rechnung buchen.vbs` doppelklicken. Wie du den `python\`-Ordner selbst baust,
-steht in [Anleitung.md](Anleitung.md).
+`Rechnung buchen (mit Konsole).bat`. Der `python\`-Ordner ist rund 457 MB groß
+und steht in der `.gitignore` – nach dem Klonen des Repos fehlt er deshalb. Wer
+ihn selbst bauen will, findet die Anleitung in [Anleitung.md](Anleitung.md), oder
+er nimmt gleich Variante B. Auf den Rechnern, wo das Werkzeug schon eingerichtet
+ist, liegt der Ordner fertig im Programmordner.
 
 **B) Mit eigenem Python 3.12/3.13**
 
