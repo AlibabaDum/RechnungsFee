@@ -3,7 +3,8 @@
 **Kategorie 2 (Beleg-Import), umgesetzt am 23.11.2026.** Ein PDF-Ordner mit vielen
 Belegen – so wie Online-Händler (Amazon Business, CSL, Office-Partner),
 Kreditkartenanbieter und Lieferdienste sie als Sammel-Download schicken – wird in
-eine korrigierbare Liste von Buchungssätzen umgewandelt und als CSV exportiert.
+eine korrigierbare Liste von Buchungssätzen umgewandelt. Nach dem Prüfen geht es
+weiter: direkt ins Journal (Knopf „Ins Journal buchen") oder als CSV.
 
 Grundlage war das eigenständige Zusatz-Werkzeug `werkzeug/rechnung-buchen`
 (siehe `werkzeug/rechnung-buchen/ANDERUNGEN.md`); die Erkennungs-Engine ist jetzt
@@ -36,8 +37,9 @@ bestehende Import (Zugferd/XRechnung, E-Mail-Postfach) bleibt unberührt.
    USt-Betrag, brutto. Es wird geprüft, ob `netto + USt = brutto` passt – bei
    ungenauem OCR-Text wird die Zeile als „bitte prüfen" markiert, nie still-
    schweigend als korrekt verkauft.
-6. Ergebnis ist eine editierbare Liste (Frontend) und wird auf Wunsch als CSV
-   mit Buchungssätzen heruntergeladen.
+6. Ergebnis ist eine editierbare Liste (Frontend). Danach wird auf Wunsch direkt
+   ins Journal gebucht (Abschnitt „Direkt ins Journal buchen") oder als CSV mit
+   Buchungssätzen heruntergeladen.
 
 ## Endpunkte (`src/backend/api/beleg_sammelimport.py`)
 
@@ -45,6 +47,7 @@ bestehende Import (Zugferd/XRechnung, E-Mail-Postfach) bleibt unberührt.
 |---|---|
 | `POST /api/beleg-sammelimport/lesen` | PDF (multipart-Feld `datei`) → Liste, Kontenvorschläge, Dauer, Hinweis |
 | `POST /api/beleg-sammelimport/csv` | editierbare Zeilen → CSV (`utf-8-sig`, Semikolon, Dezimalkomma) |
+| `POST /api/beleg-sammelimport/buchen` | editierbare Zeilen → ein `Journaleintrag` je Beleg |
 | `GET  /api/beleg-sammelimport/listen` | Kontenrahmen, Aufwand- und Kreditorenkonten, gemerkte Zuordnungen |
 | `POST /api/beleg-sammelimport/merken` | eine Zuordnung „Lieferant → Konto" merken |
 | `POST /api/beleg-sammelimport/zuruecksetzen` | alle gemerkten Zuordnungen löschen |
@@ -77,12 +80,49 @@ damit die App-Datenbank davon unberührt bleibt). Die Seite zeigt die Liste an u
 kann das Lernen zurücksetzen. Beim CSV-Download werden alle in der Liste korrigierten
 Zuordnungen automatisch gemerkt (abschaltbar).
 
+## Direkt ins Journal buchen
+
+Der Knopf „Ins Journal buchen" unter der Liste schreibt jeden Beleg als normalen
+`Journaleintrag` – **derselbe Code wie eine von Hand erfasste Ausgabe**
+(`api/journal.py::create_eintrag`): die Kategorie kommt aus dem Aufwandskonto der
+Liste (`kategorie_id`, Konten-Snapshot auf die Kategorie-Kontonummer), USt-Satz und
+Vorsteuer aus den erkannten Werten, netto rechnet das Journal aus dem Bruttobetrag,
+die Belegnummer holt der Nummernkreis, am Ende steht die GoBD-Signatur. Der
+Lieferant der Stammdaten wird verknüpft, wenn der Name (unscharf) eindeutig passt;
+die Rechnungsnummer wandert in `externe_belegnr`.
+
+Wichtig für das Verständnis: das Journal der App ist **kategorienbasiert**
+(Kasse/Bank/PayPal + Aufwandskategorie), keine doppelte Buchungszeile mit
+Gegenkonto. Das Kreditorenkonto aus der Liste braucht deshalb nur die CSV (und ein
+künftiger DATEV-Export); im Journal steht es nicht noch einmal.
+
+Was **nicht** gebucht, sondern mit deutscher Begründung übersprungen wird –
+halbe Buchungen gibt es hier nicht:
+
+- Dubletten (derselbe Beleg weiter oben in derselben Liste)
+- fremde Währung (das Journal rechnet in Euro)
+- fehlendes oder unlesbares Datum, fehlender oder nulliger Bruttobetrag
+- Zeilen, bei denen `netto + USt = brutto` nicht aufgeht (außer der Nutzer nimmt
+  sie mit dem Häkchen „Zeilen mit Schieflage bei den Summen mitbuchen" bewusst)
+- Aufwandskonto, das zu keiner Kategorie der App gehört
+- Bar-Ausgabe über dem Kassenstand (gleiche Prüfung wie im Buchungsformular)
+- Zeilen, die genauso schon im Journal stehen: gleiches Datum, gleicher Betrag und
+  gleiche `externe_belegnr` (bzw. gleicher Buchungstext). Mehrfach klicken ist
+  dadurch ungefährlich; eine eigene Herkunftstabelle wäre nur mit einer
+  Datenbank-Migration möglich und wurde bewusst nicht eingebaut.
+
+Die Liste zeigt nach dem Buchen pro Zeile „gebucht {Belegnr}", „nicht gebucht" oder
+„fehlgeschlagen" (mit Grund im Detailbereich), darüber eine Zusammenfassung mit
+Anzahl und Summe. Journal, Monatsübersicht und Kassenstand werden im Frontend neu
+geladen.
+
 ## Was (noch) nicht dazugehört
 
-- **Direktbuchung ins Journal**: exportiert wird die CSV. Der Schritt „CSV →
-  Journal" existiert bereits als Bank-/CSV-Import; eine eigene Tabelle `belege`
-  nach `docs/v0.2-beleg-import-plan.md` ist für die Direktbuchung vorgesehen und
-  hier bewusst noch nicht angefasst (dafür wäre eine Datenbank-Migration nötig).
+- **Keine eigene Belegtabelle**: die Buchung erkennt Dubletten über das Journal
+  selbst. Die geplante Tabelle `belege` nach `docs/v0.2-beleg-import-plan.md`
+  (Herkunft, Anhang je Buchung) wäre eine Datenbank-Migration und ist nicht angefasst.
+- **Kein Abgleich mit Kontoauszügen**: gebucht wird, was auf dem Beleg steht. Ob die
+  Zahlung schon auf der Bank angekommen ist, prüft weiterhin der Bank-Import.
 - **DATEV-Format**: `werkzeug/rechnung-buchen/belegerkennung/datev.py` existiert,
   ist aber in beiden Programmen nicht freigeschaltet.
 - **Kein Feature-Flag / keine Migration**: der Menüeintrag ist immer sichtbar.
@@ -104,9 +144,11 @@ durchgelaufene Bau unter Windows steht in `CONTRIBUTING.md`
 
 ## Nachgeprüft
 
-- `src/backend/tests/test_beleg_sammelimport.py`: 15 Tests (Gruppierung,
+- `src/backend/tests/test_beleg_sammelimport.py`: 23 Tests (Gruppierung,
   Dubletten, Vorschau-Konten, Lernen, unscharfer Lieferanten-Abgleich,
-  CSV-Format, SKR04/anderer Rahmen, Cache-Aufräumung, Hochlade-Prüfungen).
+  CSV-Format, SKR04/anderer Rahmen, Cache-Aufräumung, Hochlade-Prüfungen und das
+  Buchen ins Journal: Felder des Journals, Dublettenschutz beim zweiten Klick,
+  fehlendes Konto, schiefe Summen, Zahlungsart, Kommazahlen aus dem Formular).
 - Praxisordner (27 Seiten, 17 Belege, 1 Dublette): erste Erkennung rund
   3 Minuten, zweiter Durchlauf aus dem Zwischenspeicher heraus etwa 2 Sekunden,
   alle Zeilen mit Prüfung „OK".

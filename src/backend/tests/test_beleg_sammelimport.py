@@ -3,8 +3,10 @@
 Die OCR selbst läuft in den Tests nicht (dauert Minuten und braucht die
 Erkennungsmodelle); getestet wird alles, was die App daraus baut: Gruppierung
 und Felder aus bereits erkannten OCR-Zeilen, die Konto-Vorschläge aus
-Kategorien und Stammdaten, das Lernen je Lieferant und die CSV-Ausgabe.
+Kategorien und Stammdaten, das Lernen je Lieferant, die CSV-Ausgabe und das
+Buchen der berichtigten Liste ins Journal.
 """
+from datetime import date
 from decimal import Decimal
 from io import BytesIO
 
@@ -15,7 +17,7 @@ from starlette.datastructures import Headers, UploadFile
 
 from api import beleg_sammelimport as api
 from database.connection import Base
-from database.models import Kategorie, Lieferant, Unternehmen
+from database.models import Journaleintrag, Kategorie, Lieferant, Unternehmen
 from utils.beleg_ocr import csv_export
 from utils.beleg_ocr.konten import KREDITOR, SACH, Konto, Konten, laden, schluessel
 from utils.beleg_ocr.model import Beleg
@@ -312,3 +314,108 @@ def test_csv_liest_wieder_was_hinausgeschrieben_wurde(im_profildatenordner):
     assert len(zurueck) == 1
     assert zurueck[0].soll_konto == "3400"
     assert zurueck[0].brutto == Decimal("119.00")
+
+
+# ---------------------------------------------------------------------------
+# Direkt ins Journal buchen – derselbe Weg wie eine von Hand erfasste Ausgabe
+# ---------------------------------------------------------------------------
+
+def _liste(**werte) -> api.BelegZeile:
+    """Eine Zeile, so wie sie nach dem Bearbeiten aus dem Formular kommt."""
+    return api._zeile(_beleg(**werte), Konten([], []))
+
+
+def test_buchen_legt_journal_eintrag_an(db):
+    antwort = api.buchen(api.BuchenRequest(zeilen=[_liste()], zahlungsart="Bank"), db)
+    assert (antwort.gebucht, antwort.uebersprungen, antwort.fehlgeschlagen) == (1, 0, 0)
+    assert antwort.summe == Decimal("119.00")
+
+    eintrag = db.query(Journaleintrag).one()
+    assert (eintrag.art, eintrag.zahlungsart) == ("Ausgabe", "Bank")
+    assert eintrag.datum == date(2026, 11, 5)
+    assert eintrag.brutto_betrag == Decimal("119.00")
+    assert eintrag.netto_betrag == Decimal("100.00")
+    assert eintrag.ust_betrag == Decimal("19.00")
+    assert eintrag.vorsteuer_betrag == Decimal("19.00")
+    assert eintrag.kategorie.name == "Wareneingang 19%"
+    assert eintrag.konto_skr03 == "3400"
+    assert eintrag.lieferant.firmenname.startswith("Amazon Business")
+    assert eintrag.externe_belegnr == "DE1234567890AB"
+    assert eintrag.signatur and eintrag.belegnr
+    assert "Amazon Business" in eintrag.beschreibung
+    assert antwort.ergebnisse[0].belegnr == eintrag.belegnr
+
+
+def test_buchen_zweites_Klicken_erzeugt_keine_Zweitbuchung(db):
+    """Gleiche Liste, aber neue Rechnung im Journal: erst nach dem Buchen selbst."""
+    zeilen = [_liste()]
+    api.buchen(api.BuchenRequest(zeilen=zeilen), db)
+    zweite = api.buchen(api.BuchenRequest(zeilen=zeilen), db)
+
+    assert (zweite.gebucht, zweite.uebersprungen) == (0, 1)
+    assert "schon im Journal" in zweite.ergebnisse[0].begruendung
+    assert zweite.ergebnisse[0].belegnr == db.query(Journaleintrag).one().belegnr
+    assert db.query(Journaleintrag).count() == 1
+
+
+def test_buchen_dublette_in_der_Liste_bleibt_draussen(db):
+    dublette = _liste()
+    dublette.duplizat_von = 0
+    antwort = api.buchen(api.BuchenRequest(zeilen=[_liste(), dublette]), db)
+
+    assert (antwort.gebucht, antwort.uebersprungen) == (1, 1)
+    assert "Dublette" in antwort.ergebnisse[1].begruendung
+    assert db.query(Journaleintrag).count() == 1
+
+
+def test_buchen_sachkonto_ohne_Kategorie_wird_uebersprungen(db):
+    antwort = api.buchen(api.BuchenRequest(zeilen=[_liste(soll_konto="9999")]), db)
+
+    assert (antwort.gebucht, antwort.uebersprungen) == (0, 1)
+    assert "keiner Kategorie" in antwort.ergebnisse[0].begruendung
+    assert db.query(Journaleintrag).count() == 0
+
+
+def test_buchen_schiefe_Summen_nur_mit_bewusster_Entscheidung(db):
+    zeile = _liste(ust_betrag=Decimal("10.00"))
+    ablehnend = api.buchen(api.BuchenRequest(zeilen=[zeile]), db)
+    assert ablehnend.uebersprungen == 1
+    assert "stimmt nicht" in ablehnend.ergebnisse[0].begruendung
+
+    annehmend = api.buchen(api.BuchenRequest(zeilen=[zeile], auch_ohne_pruefung=True), db)
+    assert annehmend.gebucht == 1
+    assert "Summenpr\u00fcfung" in annehmend.ergebnisse[0].hinweis
+    assert db.query(Journaleintrag).one().brutto_betrag == Decimal("119.00")
+
+
+def test_buchen_zahlungsart_steht_auf_dem_Beleg(db):
+    api.buchen(api.BuchenRequest(zeilen=[_liste(zahlungsart="bezahlt mit Kreditkarte")],
+                                 zahlungsart="Bank"), db)
+    assert db.query(Journaleintrag).one().zahlungsart == "Karte"
+
+    ohne = api.buchen(api.BuchenRequest(zeilen=[_liste(zahlungsart="bar")],
+                                        zahlungsart="Bank"), db)
+    assert ohne.uebersprungen == 1
+    assert "Kassenstand" in ohne.ergebnisse[0].begruendung
+    assert db.query(Journaleintrag).count() == 1
+
+
+def test_buchen_kennt_nur_Euro_und_will_ein_Datum(db):
+    antwort = api.buchen(api.BuchenRequest(
+        zeilen=[_liste(waehrung="USD"), _liste(belegdatum="irgendwas")]), db)
+
+    assert (antwort.gebucht, antwort.uebersprungen) == (0, 2)
+    assert "W\u00e4hrung USD" in antwort.ergebnisse[0].begruendung
+    assert "Belegdatum" in antwort.ergebnisse[1].begruendung
+
+
+def test_buchen_und_csv_mit_Kommazahlen_aus_dem_Formular(im_profildatenordner, db):
+    """Wer in die Liste '119,00' tippt, darf nirgends eine Fehlermeldung bekommen."""
+    zeile = _liste()
+    zeile.netto, zeile.ust_betrag, zeile.brutto = "100,00", "19,00", "119,00"
+
+    csv = api.csv_download(api.ZeilenRequest(zeilen=[zeile], dateiname="sammel"))
+    assert b"119,00" in csv.body
+
+    assert api.buchen(api.BuchenRequest(zeilen=[zeile]), db).gebucht == 1
+    assert db.query(Journaleintrag).one().brutto_betrag == Decimal("119.00")

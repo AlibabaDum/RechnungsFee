@@ -13,10 +13,13 @@ Journal) stehen hier zwei Dinge im Vordergrund:
    im Kontenrahmen des Unternehmens), Lieferanten-Konten aus den Stammdaten.
    Was hier korrigiert wird, merkt sich das Programm je Lieferantennamen.
 
-Ergebnis ist eine CSV-Datei (Semikolon, deutsche Kommazahlen) zum Import ins
-eigene Buchhaltungssystem. Die Belege werden **nicht** ins Journal gebucht –
-das ist ein bewusster Zwischenstand, siehe auch
-``werkzeug/rechnung-buchen/ANDERUNGEN.md``.
+Ergebnis ist eine korrigierbare Liste, und die wandert auf zwei Wegen in die
+Buchhaltung: direkt ins **Journal** der App (Knopf „Ins Journal buchen“ – ein
+Journaleintrag je Beleg, angelegt exakt wie eine manuell erfasste Ausgabe, also
+mit Kategorie, Zahlungsart, Lieferant und GoBD-Signatur) oder als **CSV-Datei**
+(Semikolon, deutsche Kommazahlen) für das eigene Buchhaltungssystem. Das
+Lieferanten-Konto braucht nur die CSV: im Journal steht stattdessen die
+Kategorie, und der Lieferant wird über die Stammdaten verknüpft.
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ import hashlib
 import logging
 import time
 from dataclasses import asdict
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
@@ -35,11 +40,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database.connection import APP_DATA_DIR, get_db
-from database.models import Kategorie, Lieferant, Unternehmen
+from database.models import Journaleintrag, Kategorie, Lieferant, Unternehmen
 from utils.beleg_ocr import csv_export
+from utils.beleg_ocr.fields import parse_date as ocr_datum
 from utils.beleg_ocr.konten import KREDITOR, SACH, Konto, Konten, laden, schluessel
 from utils.beleg_ocr.model import Beleg
 from utils.beleg_ocr.pipeline import Ergebnis, belege_aus_pdf
+from .journal import _get_bar_kassenstand, create_eintrag
+from .schemas import JournalEintragCreate
 
 router = APIRouter(prefix="/api/beleg-sammelimport", tags=["Beleg-Sammelimport"])
 _LOG = logging.getLogger("beleg_sammelimport")
@@ -142,6 +150,31 @@ class MerkenRequest(BaseModel):
     kreditor: str = ""
 
 
+class BuchenRequest(BaseModel):
+    """Die Liste, so wie sie nach dem Bearbeiten auf dem Bildschirm steht."""
+    zeilen: list[BelegZeile]
+    zahlungsart: str = "Bank"        # Standard, wenn der Beleg selbst nichts hergibt
+    auch_ohne_pruefung: bool = False # Zeilen mit Schieflage bei den Summen bewusst mitbuchen
+
+
+class BuchErgebnis(BaseModel):
+    index: int                       # Position in der gesendeten Liste
+    status: str                      # gebucht | uebersprungen | fehlgeschlagen
+    belegnr: str = ""                # Journal-Belegnummer
+    begruendung: str = ""            # warum nicht gebucht
+    kategorie: str = ""              # gewählte Kategorie (zur Kontrolle)
+    zahlungsart: str = ""
+    hinweis: str = ""                # z. B. "kein Lieferant in den Stammdaten"
+
+
+class BuchAntwort(BaseModel):
+    gebucht: int = 0
+    uebersprungen: int = 0
+    fehlgeschlagen: int = 0
+    summe: Decimal = Decimal("0.00")
+    ergebnisse: list[BuchErgebnis] = []
+
+
 # ---------------------------------------------------------------------------
 # Konten herbeiholen: Kategorien und Stammdaten der App
 # ---------------------------------------------------------------------------
@@ -217,33 +250,76 @@ def _kreditoren_lookup(db: Session) -> dict[str, str]:
     return out
 
 
-def _passender_kreditor(lieferant: str, lookup: dict[str, str]) -> str:
-    """Kreditoren-Nummer zu einem (OCR-)Lieferantennamen, notfalls ähnlich.
+def _ahnlichster_schluessel(sch: str, schluesel: dict) -> str:
+    """Der Schlüssel aus `schluesel`, der am ehesten zu `sch` passt – '' bei Zweifel.
 
     Erst exakt, dann ähnlich ('Telekom Deutschland GmbH' trifft
-    'telekom-deutschland'), dann als Teil des Stammdaten-Namens: die
-    Texterkennung liest von einer Adresse oft nur den oberen Teil und liefert
-    damit 'amazon business eu s.a.r.l.' statt des vollen Namens. Treffen mehrere
-    Lieferanten gleich gut, wird nicht geraten - dann wählt die Liste selbst.
+    'telekom-deutschland'), dann als Teil: die Texterkennung liest von einer
+    Adresse oft nur den oberen Teil und liefert damit 'amazon business eu
+    s.a.r.l.' statt des vollen Namens. Treffen mehrere gleich gut, wird nicht
+    geraten - dann entscheidet selbst, was auf dem Bildschirm steht.
     """
-    sch = schluessel(lieferant)
     if not sch:
         return ""
-    if sch in lookup:
-        return lookup[sch]
+    if sch in schluesel:
+        return sch
     treffer: list[tuple[float, str]] = []
-    for key, nr in lookup.items():
+    for key in schluesel:
         ahnlichkeit = SequenceMatcher(None, sch, key).ratio()
         if len(sch) >= 8 and (sch in key or key in sch):
             ahnlichkeit = max(ahnlichkeit, 0.95)
         if ahnlichkeit > 0.9:
-            treffer.append((ahnlichkeit, nr))
+            treffer.append((ahnlichkeit, key))
     if not treffer:
         return ""
     bester = max(w for w, _ in treffer)
     if sum(1 for w, _ in treffer if w == bester) > 1:
         return ""
     return max(treffer)[1]
+
+
+def _passender_kreditor(lieferant: str, lookup: dict[str, str]) -> str:
+    """Kreditoren-Nummer zu einem (OCR-)Lieferantennamen, notfalls ähnlich."""
+    return lookup.get(_ahnlichster_schluessel(schluessel(lieferant), lookup), "")
+
+
+def _kategorien_lookup(db: Session, rahmen: str) -> dict[str, tuple[Kategorie, str]]:
+    """Kontonummer -> Kategorie im gewählten Kontenrahmen.
+
+    Eine Nummer kann zu mehreren Kategorien gehören (dann trifft sie die
+    Aufwandskategorie am ehesten). Der zweite Wert der Tuple ist ein Hinweis für
+    die Rückmeldung, '' wenn alles eindeutig ist.
+    """
+    spalte = _spalte(rahmen)
+    out: dict[str, tuple[Kategorie, str]] = {}
+    for k in (db.query(Kategorie)
+              .filter(Kategorie.aktiv.is_(True))
+              .order_by(Kategorie.name).all()):
+        nr = (getattr(k, spalte, None) or "").strip()
+        if not nr:
+            continue
+        bisher = out.get(nr)
+        if bisher is None:
+            out[nr] = (k, "")
+        elif bisher[0].kontenart != "Aufwand" and k.kontenart == "Aufwand":
+            out[nr] = (k, f"Kontonummer {nr} steht mehrfach in den Kategorien – „{k.name}“ gewählt")
+        else:
+            out[nr] = (bisher[0], bisher[1] or f"Kontonummer {nr} steht mehrfach in den Kategorien – „{bisher[0].name}“ gewählt")
+    return out
+
+
+def _lieferanten_lookup(db: Session) -> dict[str, Lieferant]:
+    """Vergleichsname -> Lieferant (Stammdaten), für die Verknüpfung der Buchung."""
+    out: dict[str, Lieferant] = {}
+    for lf in db.query(Lieferant).all():
+        sch = schluessel(_lieferanten_name(lf))
+        if sch and sch not in out:
+            out[sch] = lf
+    return out
+
+
+def _passender_lieferant(schluesel: dict[str, Lieferant], name: str) -> Optional[Lieferant]:
+    return schluesel.get(_ahnlichster_schluessel(schluessel(name), schluesel))
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +359,58 @@ def _zeile(b: Beleg, konten: Konten) -> BelegZeile:
     )
 
 
+def _geld(rohtext: str) -> Optional[Decimal]:
+    """Zahl aus dem Formular: '42,83', '42.83', '1.234,56', '1234.56 €'.
+
+    Die Liste darf der Nutzer frei berichtigen, deshalb ist hier alles erlaubt,
+    was man in Deutschland eintippt. None, wenn nichts Sinnvolles drinsteht.
+    """
+    text = (rohtext or "").replace("\u00a0", " ")
+    text = "".join(ch for ch in text if not ch.isalpha()).strip()
+    if not text:
+        return None
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(",", ".")
+    else:
+        ganzz, _, nachkomma = text.partition(".")
+        if nachkomma.isdigit() and len(nachkomma) == 3 and ganzz.isdigit():
+            text = ganzz + nachkomma  # Tausenderpunkt: 1.500 = 1500
+    try:
+        return Decimal(text).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _datum(rohtext: str) -> Optional[date]:
+    """Datum aus der Liste ('05.11.26', '05.11.2026', '2026-11-05'), notfalls
+    so lesen wie die Texterkennung es würde."""
+    text = (rohtext or "").strip()
+    if not text:
+        return None
+    for format in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text, format).date()
+        except ValueError:
+            continue
+    gelesen = ocr_datum(text, year_hint=date.today().year)
+    try:
+        return datetime.strptime(gelesen, "%d.%m.%Y").date() if gelesen else None
+    except ValueError:
+        return None
+
+
 def _beleg(z: BelegZeile) -> Beleg:
     d = z.model_dump()
     d.pop("pruefung", None)
     d.pop("konfidenz", None)
     d.pop("haben_konto_vorschlag", None)
+    for feld in ("netto", "ust_betrag", "brutto"):
+        text = str(d.get(feld) or "").strip()
+        if text:
+            wert = _geld(text)
+            d[feld] = "" if wert is None else str(wert)
     return Beleg.from_dict(d)
 
 
@@ -395,6 +518,175 @@ def csv_download(req: ZeilenRequest) -> Response:
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{dateiname}"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Direkt ins Journal buchen
+# ---------------------------------------------------------------------------
+
+# Zahlungsarten des Journals, in dieser Reihenfolge geprüft: 'Kreditkarte' vor
+# 'Bank', damit eine Kartenzahlung nicht als Überweisung landet.
+_ZAHLUNGSARTEN: dict[str, tuple[str, ...]] = {
+    "Bar": ("bar", "barzahlung", "cash"),
+    "Karte": ("karte", "credit", "visa", "mastercard", "amex", "american express"),
+    "PayPal": ("paypal", "pay pal"),
+    "Bank": ("lastschrift", "überweisung", "ueberweisung", "bank", "abbuchung",
+             "kontoauszug", "sepa", "dauerauftrag"),
+}
+# Was das Journal überhaupt kennt (siehe api/schemas.py::JournalEintragCreate).
+ERLAUBTE_ZAHLUNGSARTEN = ("Bar", "Karte", "Bank", "PayPal", "Keine")
+
+
+def _zahlungsart(rohtext: str, standard: str) -> str:
+    """Zahlungsart vom Belegtext auf den Begriff des Journals bringen."""
+    text = (rohtext or "").strip().lower()
+    for art, worter in _ZAHLUNGSARTEN.items():
+        if any(w in text for w in worter):
+            return art
+    return standard
+
+
+def _buch_text(z: BelegZeile) -> str:
+    """Beschreibung im Journal: Lieferant, Belegtext, Bestellnummer - ohne Doppelung."""
+    teile: list[str] = []
+    for teil in (z.lieferant, z.text, z.bestellnummer):
+        teil = (teil or "").strip()
+        if teil and teil not in teile:
+            teile.append(teil)
+    return " · ".join(teile)[:500] or "Beleg-Sammelimport"
+
+
+def _bereits_gebucht(db: Session, *, datum: date, nummer: str, brutto: Decimal, text: str) -> str:
+    """Belegnummer eines Eintrags, der genauso schon im Journal steht - '' wenn nicht.
+
+    Damit darf ruhig zweimal geklickt werden, auch wenn dieselbe PDF-Datei
+    morgen noch einmal auf der Seite liegt.
+    """
+    suche = (db.query(Journaleintrag.belegnr)
+             .filter(Journaleintrag.datum == datum, Journaleintrag.brutto_betrag == brutto))
+    suche = (suche.filter(Journaleintrag.externe_belegnr == nummer) if nummer
+             else suche.filter(Journaleintrag.beschreibung == text))
+    treffer = suche.order_by(Journaleintrag.id).first()
+    return treffer[0] if treffer else ""
+
+
+@router.post("/buchen", response_model=BuchAntwort)
+def buchen(req: BuchenRequest, db: Session = Depends(get_db)) -> BuchAntwort:
+    """Korrigierte Liste direkt ins Journal schreiben – ein Eintrag je Beleg.
+
+    Der Weg ist genau der einer von Hand erfassten Ausgabe:
+    ``api/journal.py::create_eintrag`` rechnet netto/USt vor, prüft Kategorie,
+    Zahlungsart und Barkasse, zieht die Nummer aus dem Nummernkreis und
+    unterschreibt GoBD. Was die Liste nicht sauber erklären kann (Dublette,
+    fehlender Betrag, Konto ohne Kategorie), wird übersprungen und begründet –
+    halbe Buchungen gibt es hier nicht.
+    """
+    rahmen = _rahmen(db)
+    kategorien = _kategorien_lookup(db, rahmen)
+    lieferanten = _lieferanten_lookup(db)
+    standard = req.zahlungsart if req.zahlungsart in ERLAUBTE_ZAHLUNGSARTEN else "Bank"
+    antwort = BuchAntwort()
+
+    def _melde(index: int, status: str, *, belegnr: str = "", grund: str = "",
+               kategorie: str = "", zahlungsart: str = "", hinweis: str = "") -> None:
+        antwort.ergebnisse.append(BuchErgebnis(
+            index=index, status=status, belegnr=belegnr, begruendung=grund,
+            kategorie=kategorie, zahlungsart=zahlungsart, hinweis=hinweis))
+        if status == "uebersprungen":
+            antwort.uebersprungen += 1
+        elif status == "fehlgeschlagen":
+            antwort.fehlgeschlagen += 1
+
+    for laufend, z in enumerate(req.zeilen):
+        beleg = _beleg(z)
+        if not beleg.buchbar:
+            _melde(laufend, "uebersprungen",
+                   grund="Dublette – derselbe Beleg steht schon weiter oben in der Liste")
+            continue
+        waehrung = (z.waehrung or "EUR").strip().upper()
+        if waehrung not in ("EUR", ""):
+            _melde(laufend, "uebersprungen",
+                   grund=f"Währung {z.waehrung}: das Journal rechnet in Euro – "
+                         "Betrag bitte in Euro eintragen")
+            continue
+        datum = _datum(beleg.belegdatum)
+        if datum is None:
+            _melde(laufend, "uebersprungen",
+                   grund="Belegdatum fehlt oder ist unlesbar – bitte in der Liste eintragen")
+            continue
+        brutto = _geld(z.brutto)
+        if brutto is None or brutto <= 0:
+            _melde(laufend, "uebersprungen",
+                   grund="Bruttobetrag fehlt oder ist keine Zahl – bitte eintragen")
+            continue
+        if not beleg.summen_ok and not req.auch_ohne_pruefung:
+            _melde(laufend, "uebersprungen",
+                   grund="netto + USt = brutto stimmt nicht – bitte berichtigen "
+                         "oder Zeile bewusst mitnehmen")
+            continue
+        konto = (beleg.soll_konto or "").strip()
+        kat, hinweis = kategorien.get(konto, (None, ""))  # type: ignore[arg-type]
+        if kat is None:
+            _melde(laufend, "uebersprungen",
+                   grund=f"Sachkonto {konto or '(leer)'} gehört zu keiner Kategorie der App – "
+                         "bitte eines der Konten aus der Liste wählen")
+            continue
+        zahlungsart = _zahlungsart(beleg.zahlungsart, standard)
+        if zahlungsart == "Bar" and brutto > _get_bar_kassenstand(db):
+            _melde(laufend, "uebersprungen",
+                   grund="Bar-Ausgabe wäre höher als der Kassenstand – Zahlungsart ändern")
+            continue
+        nummer = (beleg.rechnungsnummer or beleg.belegfeld1 or "").strip()[:100]
+        text = _buch_text(z)
+        schon = _bereits_gebucht(db, datum=datum, nummer=nummer, brutto=brutto, text=text)
+        if schon:
+            _melde(laufend, "uebersprungen", belegnr=schon, kategorie=kat.name,
+                   zahlungsart=zahlungsart,
+                   grund="genau so steht die Buchung schon im Journal")
+            continue
+        lieferant = _passender_lieferant(lieferanten, beleg.lieferant)
+        satz = Decimal(beleg.ust_satz or 0)
+        daten = JournalEintragCreate(
+            datum=datum,
+            beschreibung=text,
+            kategorie_id=kat.id,
+            lieferant_id=lieferant.id if lieferant else None,
+            zahlungsart=zahlungsart,
+            art="Ausgabe",
+            brutto_betrag=brutto,
+            ust_satz=satz,
+            vorsteuerabzug=satz > 0,
+            externe_belegnr=nummer or None,
+        )
+        try:
+            eintrag = create_eintrag(daten, db)
+        except HTTPException as exc:      # z. B. Barkasse, Nummernkreis
+            db.rollback()
+            _melde(laufend, "fehlgeschlagen", kategorie=kat.name, zahlungsart=zahlungsart,
+                   grund=str(exc.detail)[:200])
+            continue
+        except Exception as exc:          # alles andere bleibt nachlesbar
+            db.rollback()
+            _LOG.exception("Beleg-Sammelimport: Journal-Buchung Zeile %d fehlgeschlagen", laufend)
+            _melde(laufend, "fehlgeschlagen", kategorie=kat.name, zahlungsart=zahlungsart,
+                   grund=f"Journal hat abgelehnt: {str(exc)[:200]}")
+            continue
+        antwort.gebucht += 1
+        antwort.summe = (antwort.summe + brutto).quantize(Decimal("0.01"))
+        zusatz = [hinweis] if hinweis else []
+        if lieferant is None:
+            zusatz.append("kein Lieferant in den Stammdaten – Name ggf. ergänzen")
+        if not beleg.summen_ok:
+            zusatz.append("Summenprüfung war nicht in Ordnung")
+        if not nummer:
+            zusatz.append("ohne externe Belegnummer gebucht")
+        _melde(laufend, "gebucht", belegnr=eintrag.belegnr,
+               kategorie=f"{kat.name} ({konto})", zahlungsart=zahlungsart,
+               hinweis="; ".join(zusatz))
+
+    _LOG.info("Beleg-Sammelimport ins Journal: %d gebucht, %d übersprungen, %d fehlgeschlagen",
+              antwort.gebucht, antwort.uebersprungen, antwort.fehlgeschlagen)
+    return antwort
 
 
 @router.get("/listen")

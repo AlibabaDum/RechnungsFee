@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listen } from '@tauri-apps/api/event'
 import {
+  bucheBelege,
   downloadBelegCsv,
   getBelegCacheInfo,
   getBelegListen,
@@ -10,6 +11,8 @@ import {
   leseGedroppteDatei,
   merkBelegKonto,
   setzeBelegLernenZurueck,
+  type BelegBuchAntwort,
+  type BelegBuchErgebnis,
   type BelegKonto,
   type BelegLeseErgebnis,
   type BelegZeile,
@@ -17,7 +20,8 @@ import {
 import { useMxAuto } from '../../hooks/useAnsicht'
 
 // Ein PDF mit vielen Belegen (Sammel-Download vom Online-Händler, Kreditkarten-Belegordner …)
-// wird seitenweise erkannt, in eine Liste zerlegt und als CSV mit Buchungssätzen ausgegeben.
+// wird seitenweise erkannt, in eine Liste zerlegt und nach dem Korrigieren direkt ins Journal
+// gebucht oder als CSV mit Buchungssätzen ausgegeben.
 // Die Texterkennung läuft auf dem eigenen Rechner; hochgeladen wird nichts.
 
 const MAX_ZEILEN_ANZEIGE = 400   // wie beim Bank-Import: sehr lange Listen nur teilweise rendern
@@ -26,6 +30,13 @@ function dauerFmt(sekunden: number): string {
   if (sekunden < 60) return `${Math.round(sekunden)} Sekunden`
   const minuten = Math.floor(sekunden / 60)
   return `${minuten} Minuten ${Math.round(sekunden - minuten * 60)} Sekunden`
+}
+
+function geldFmt(wert: string | number): string {
+  const zahl = typeof wert === 'number' ? wert : Number(wert)
+  return Number.isFinite(zahl)
+    ? zahl.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : String(wert)
 }
 
 /** Text der Texterkennung ist ungenau: Beträge dürfen nie stillschweigend stimmen. */
@@ -37,6 +48,46 @@ function pruefungsBadge(wert: string) {
     <span title={wert} className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[11px]">
       bitte prüfen
     </span>
+  )
+}
+
+/** Was das Journal zu einer Zeile gesagt hat – nach dem Klick auf „Ins Journal buchen“. */
+function buchungsBadge(ergebnis?: BelegBuchErgebnis) {
+  if (!ergebnis) return null
+  if (ergebnis.status === 'gebucht') {
+    return (
+      <span title={`${ergebnis.kategorie} · ${ergebnis.zahlungsart}${ergebnis.hinweis ? ` · ${ergebnis.hinweis}` : ''}`}
+        className="px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-[11px]">
+        gebucht {ergebnis.belegnr}
+      </span>
+    )
+  }
+  if (ergebnis.status === 'uebersprungen') {
+    return (
+      <span title={ergebnis.begruendung}
+        className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300 text-[11px]">
+        nicht gebucht
+      </span>
+    )
+  }
+  return (
+    <span title={ergebnis.begruendung}
+      className="px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-[11px]">
+      fehlgeschlagen
+    </span>
+  )
+}
+
+/** Was das Journal zu dieser Zeile gesagt hat – im Detailbereich der Liste. */
+function JournalRueckmeldung({ ergebnis }: { ergebnis: BelegBuchErgebnis }) {
+  const text = ergebnis.status === 'gebucht'
+    ? `gebucht als ${ergebnis.belegnr} · ${ergebnis.kategorie} · ${ergebnis.zahlungsart}`
+    : `${ergebnis.status === 'fehlgeschlagen' ? 'fehlgeschlagen' : 'nicht gebucht'} – ${ergebnis.begruendung}`
+  return (
+    <p className="mt-3 text-xs text-slate-600 dark:text-slate-300">
+      Journal: {text}
+      {ergebnis.hinweis && <span className="text-amber-700 dark:text-amber-300"> · {ergebnis.hinweis}</span>}
+    </p>
   )
 }
 
@@ -75,6 +126,11 @@ export function BelegSammelImportPage() {
   const [nurBuchbare, setNurBuchbare] = useState(true)
   const [automatischMerken, setAutomatischMerken] = useState(true)
   const [geoeffnet, setGeoeffnet] = useState<number | null>(null)
+  // Direkt ins Journal buchen: Standard-Zahlungsart, wenn der Beleg selbst keine hergibt
+  const [zahlungsart, setZahlungsart] = useState('Bank')
+  const [auchOhnePruefung, setAuchOhnePruefung] = useState(false)
+  const [amBuchen, setAmBuchen] = useState(false)
+  const [buchAntwort, setBuchAntwort] = useState<BelegBuchAntwort | null>(null)
 
   // Dropdown-Konten gibt es schon bevor das erste PDF gelesen wurde (Kategorien, Stammdaten)
   const { data: vorliegendeListen } = useQuery({
@@ -92,6 +148,13 @@ export function BelegSammelImportPage() {
 
   const angezeigt = useMemo(() => zeilen.slice(0, MAX_ZEILEN_ANZEIGE), [zeilen])
   const dubletten = zeilen.filter(z => z.duplizat_von !== null).length
+  const buchbar = zeilen.filter(z => z.duplizat_von === null).length
+  // Zeilennummer -> Rückmeldung des Journals, damit die Liste zeigt, was passiert ist
+  const buchungen = useMemo(() => {
+    const karte = new Map<number, BelegBuchErgebnis>()
+    for (const e of buchAntwort?.ergebnisse ?? []) karte.set(e.index, e)
+    return karte
+  }, [buchAntwort])
 
   function setzeFeld(zeile: number, feld: keyof BelegZeile, wert: unknown) {
     setZeilen(prev => prev.map((z, n) => (n === zeile ? { ...z, [feld]: wert } as BelegZeile : z)))
@@ -146,27 +209,62 @@ export function BelegSammelImportPage() {
     if (f && /\.pdf$/i.test(f.name)) void lesePdf(f)
   }
 
+  /** Was hier korrigiert wurde, gilt künftig für denselben Lieferantennamen – in allen PDFs. */
+  async function kontenJeLieferantMerken() {
+    const gemerkt = new Set<string>()
+    for (const z of zeilen) {
+      const name = z.lieferant.trim()
+      if (z.duplizat_von !== null || !name || gemerkt.has(name)) continue
+      gemerkt.add(name)
+      await merkBelegKonto(name, z.soll_konto, z.haben_konto)
+    }
+    queryClient.invalidateQueries({ queryKey: ['beleg-sammelimport-listen'] })
+  }
+
   async function csvHerunterladen() {
     if (!ergebnis) return
     setFehler(null)
     try {
       await downloadBelegCsv(zeilen, belegname || 'buchungen', nurBuchbare)
-      if (automatischMerken) {
-        // Was hier korrigiert wurde, gilt künftig für denselben Lieferantennamen – in allen PDFs.
-        const gemerkt = new Set<string>()
-        for (const z of zeilen) {
-          const name = z.lieferant.trim()
-          if (z.duplizat_von !== null || !name || gemerkt.has(name)) continue
-          gemerkt.add(name)
-          await merkBelegKonto(name, z.soll_konto, z.haben_konto)
-        }
-        queryClient.invalidateQueries({ queryKey: ['beleg-sammelimport-listen'] })
-      }
+      if (automatischMerken) await kontenJeLieferantMerken()
       setMeldung(nurBuchbare
         ? `CSV ist da: ${zeilen.length - dubletten} Belege, Dubletten nicht enthalten.`
         : `CSV ist da: ${zeilen.length} Zeilen einschließlich Dubletten.`)
     } catch (e: unknown) {
       setFehler((e as Error).message)
+    }
+  }
+
+  /** Direkt buchen, ohne Umweg über die CSV: genau der Weg einer von Hand erfassten Ausgabe
+   *  (Kategorie aus dem Aufwandskonto, USt-Satz, Nummernkreis, GoBD-Signatur). Was die Liste
+   *  nicht sauber erklären kann, lässt das Journal aus – eine halbe Buchung gibt es nicht. */
+  async function insJournalBuchen() {
+    if (!ergebnis) return
+    if (buchbar === 0) {
+      setFehler('Nur Dubletten in der Liste – da gibt es nichts zu buchen.')
+      return
+    }
+    if (!confirm(`Wirklich ${buchbar} Beleg${buchbar === 1 ? '' : 'e'} ins Journal buchen? `
+      + 'Gebuchte Einträge sind unveränderlich (GoBD) und nur per Storno zu korrigieren.')) return
+    setFehler(null)
+    setAmBuchen(true)
+    try {
+      const r = await bucheBelege(zeilen, zahlungsart, auchOhnePruefung)
+      setBuchAntwort(r)
+      if (automatischMerken) await kontenJeLieferantMerken()
+      // Journal, Monatsübersicht und Kasse sollen die neuen Einträge sofort zeigen
+      queryClient.invalidateQueries({ queryKey: ['journal'] })
+      queryClient.invalidateQueries({ queryKey: ['monats-uebersicht'] })
+      queryClient.invalidateQueries({ queryKey: ['kassenstand'] })
+      const teile = [`${r.gebucht} von ${r.ergebnisse.length} Zeilen gebucht`,
+                     `Summe ${geldFmt(r.summe)} €`]
+      if (r.uebersprungen) teile.push(`${r.uebersprungen} übersprungen`)
+      if (r.fehlgeschlagen) teile.push(`${r.fehlgeschlagen} fehlgeschlagen`)
+      setMeldung(`Im Journal: ${teile.join(', ')}. In der Liste steht bei jeder Zeile, was passiert ist.`)
+    } catch (e: unknown) {
+      setFehler((e as Error).message)
+    } finally {
+      setAmBuchen(false)
     }
   }
 
@@ -186,9 +284,9 @@ export function BelegSammelImportPage() {
       <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-1">Beleg-Sammelimport</h1>
       <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
         Ein PDF mit mehreren Rechnungen und Kaufbelegen – so wie Online-Händler und Kreditkartenanbieter
-        sie schicken. Das Programm erkennt die einzelnen Belege, zeigt sie korrigierbar an und schreibt
-        daraus eine CSV mit Buchungssätzen. Die Texterkennung läuft auf diesem Rechner, es wird nichts
-        hochgeladen.
+        sie schicken. Das Programm erkennt die einzelnen Belege, zeigt sie korrigierbar an und bucht sie
+        auf Wunsch direkt ins Journal oder als CSV mit Buchungssätzen. Die Texterkennung läuft auf diesem
+        Rechner, es wird nichts hochgeladen.
       </p>
 
       <div
@@ -271,6 +369,21 @@ export function BelegSammelImportPage() {
               Konten je Lieferant merken
             </label>
             <label className="text-sm text-slate-600 dark:text-slate-300 flex items-center gap-2">
+              Zahlungsart
+              <select
+                value={zahlungsart}
+                onChange={e => setZahlungsart(e.target.value)}
+                className="text-xs border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 px-2 py-1 text-slate-800 dark:text-slate-100"
+              >
+                {['Bank', 'Bar', 'Karte', 'PayPal', 'Keine'].map(a => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </label>
+            <label className="text-sm text-slate-600 dark:text-slate-300 flex items-center gap-2"
+              title="Steht auf dem Beleg keine Zahlungsart, wird diese genommen. Steht dort etwas wie 'Lastschrift' oder 'Kreditkarte', entscheidet der Beleg.">
+              <input type="checkbox" checked={auchOhnePruefung} onChange={e => setAuchOhnePruefung(e.target.checked)} />
+              Zeilen mit Schieflage bei den Summen mitbuchen
+            </label>
+            <label className="text-sm text-slate-600 dark:text-slate-300 flex items-center gap-2">
               Dateiname
               <input
                 value={belegname}
@@ -280,12 +393,56 @@ export function BelegSammelImportPage() {
             </label>
             <button
               type="button"
+              onClick={() => void insJournalBuchen()}
+              disabled={amBuchen || buchbar === 0}
+              title="Jeder Beleg wird ein Eintrag im Journal – wie eine von Hand erfasste Ausgabe. Unveränderlich (GoBD)."
+              className="ml-auto px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+            >
+              {amBuchen ? 'Wird gebucht …' : `Ins Journal buchen (${buchbar})`}
+            </button>
+            <button
+              type="button"
               onClick={() => void csvHerunterladen()}
-              className="ml-auto px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700"
+              className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700"
             >
               CSV mit Buchungssätzen herunterladen
             </button>
           </div>
+
+          {buchAntwort && (
+            <div className="mb-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {[
+                  { label: 'gebucht', wert: String(buchAntwort.gebucht) },
+                  { label: 'übersprungen', wert: String(buchAntwort.uebersprungen) },
+                  { label: 'fehlgeschlagen', wert: String(buchAntwort.fehlgeschlagen) },
+                  { label: 'Summe gebucht', wert: `${geldFmt(buchAntwort.summe)} €` },
+                ].map(k => (
+                  <div key={k.label}>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">{k.label}</p>
+                    <p className="text-lg font-bold text-slate-800 dark:text-slate-100 mt-1">{k.wert}</p>
+                  </div>
+                ))}
+              </div>
+              <ul className="mt-3 space-y-1">
+                {buchAntwort.ergebnisse
+                  .filter(e => e.status !== 'gebucht')
+                  .map(e => (
+                    <li key={e.index} className="text-xs text-slate-600 dark:text-slate-300">
+                      <span className={e.status === 'fehlgeschlagen' ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'}>
+                        Zeile {e.index + 1}
+                      </span>
+                      {' '}– {e.begruendung || e.status}
+                      {e.belegnr && <span className="text-slate-400 dark:text-slate-500"> (Belegnr {e.belegnr})</span>}
+                    </li>
+                  ))}
+              </ul>
+              <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                Gebuchte Belege finden sich im Journal unter Buchhaltung → Journal. Korrigieren lässt sich
+                ein gebuchter Eintrag nur mit Storno und Neubuchung – deshalb vorher die Liste prüfen.
+              </p>
+            </div>
+          )}
 
           <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-x-auto mb-6">
             <table className="w-full text-sm min-w-[1180px]">
@@ -315,7 +472,12 @@ export function BelegSammelImportPage() {
                       {z.seiten.join(', ')}
                       {z.duplizat_von !== null && <span className="ml-1 text-[10px]">Dublette</span>}
                     </td>
-                    <td className="px-2 py-1">{pruefungsBadge(z.pruefung)}</td>
+                    <td className="px-2 py-1">
+                      <div className="flex flex-col items-start gap-1">
+                        {pruefungsBadge(z.pruefung)}
+                        {buchungsBadge(buchungen.get(i))}
+                      </div>
+                    </td>
                     <td className="px-2 py-1">
                       <input
                         value={z.lieferant}
@@ -422,6 +584,7 @@ export function BelegSammelImportPage() {
                           {z.flag.join(' · ')}
                         </p>
                       )}
+                      {buchungen.get(i) && <JournalRueckmeldung ergebnis={buchungen.get(i)!} />}
                       {z.soll_konto_vorschlag && z.soll_konto !== z.soll_konto_vorschlag && (
                         <p className="mt-2 text-xs">
                           <button
@@ -464,8 +627,8 @@ export function BelegSammelImportPage() {
         </div>
         {gelernt.length === 0 ? (
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Noch nichts gemerkt. Einmal korrigiert und als CSV heruntergeladen, verwendet das Programm
-            dasselbe Konto künftig für jeden Beleg mit diesem Lieferantennamen.
+            Noch nichts gemerkt. Einmal korrigiert und gebucht (oder als CSV heruntergeladen), verwendet
+            das Programm dasselbe Konto künftig für jeden Beleg mit diesem Lieferantennamen.
           </p>
         ) : (
           <table className="w-full text-xs">

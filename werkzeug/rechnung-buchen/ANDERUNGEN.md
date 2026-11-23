@@ -127,12 +127,12 @@ eingebaut – dieser Ordner hier bleibt unverändert liegen und funktioniert wei
 | Datei | Inhalt |
 |---|---|
 | `src/backend/utils/beleg_ocr/` | die Engine aus diesem Ordner (`ocr`, `pipeline`, `extract`, `fields`, `grouping`, `model`, `profiles`, `konten`, `csv_export`), ohne `gui.py`/`cli.py`/`datev.py` |
-| `src/backend/api/beleg_sammelimport.py` | neuer Router `/api/beleg-sammelimport` (lesen, csv, listen, merken, zuruecksetzen, caches) |
+| `src/backend/api/beleg_sammelimport.py` | neuer Router `/api/beleg-sammelimport` (lesen, csv, buchen, listen, merken, zuruecksetzen, caches) |
 | `src/backend/main.py` | Router eingetragen; `--selbsttest` prüft jetzt auch die OCR-Modelle im fertigen Sidecar |
 | `src/backend/requirements.txt` | `rapidocr-onnxruntime==1.2.3`, `onnxruntime==1.32.0` |
-| `src/backend/tests/test_beleg_sammelimport.py` | 15 neue Tests |
-| `src/frontend/src/pages/beleg-sammelimport/BelegSammelImportPage.tsx` | neue Seite „Beleg-Import" (Hochladen/Ziehen, Tabelle zum Korrigieren, gemerkte Zuordnungen) |
-| `src/frontend/src/api/client.ts`, `src/App.tsx`, `src/components/AppLayout.tsx` | Typen + 6 Aufrufe, Route `/beleg-import`, Menüeintrag unter „Buchhaltung" |
+| `src/backend/tests/test_beleg_sammelimport.py` | 23 neue Tests |
+| `src/frontend/src/pages/beleg-sammelimport/BelegSammelImportPage.tsx` | neue Seite „Beleg-Import" (Hochladen/Ziehen, Tabelle zum Korrigieren, „Ins Journal buchen", gemerkte Zuordnungen) |
+| `src/frontend/src/api/client.ts`, `src/App.tsx`, `src/components/AppLayout.tsx` | Typen + 7 Aufrufe, Route `/beleg-import`, Menüeintrag unter „Buchhaltung" |
 | `scripts/build-sidecar.ps1` | nimmt OCR-Bibliotheken und -Modelle ins PyInstaller-Bundle auf |
 
 Anders als in der eigenständigen Version:
@@ -148,8 +148,10 @@ Anders als in der eigenständigen Version:
 3. **Lernen liegt im Profildatenordner** (`beleg_ocr/konten.json` daneben den
    PDFs und dem OCR-Zwischenspeicher), nicht neben dem Programm – die
    App-Datenbank bleibt unverändert, es gibt keine Migration und kein Feature-Flag.
-4. **Kein DATEV-Export und keine Direktbuchung ins Journal** – CSV wie hier;
-   der Schritt „CSV → Journal" nutzt den vorhandenen Import.
+4. **CSV und Direktbuchung**: die App bucht jeden Beleg auf Knopfdruck auch direkt
+   ins Journal (Abschnitt 8). Das Kreditorenkonto aus der Liste braucht weiterhin
+   nur die CSV, weil das Journal der App kategorienbasiert arbeitet. Ein
+   DATEV-Export existiert weiterhin nicht.
 5. Der Selftest des Sidecars (`main.py --selbsttest`) wurde erweitert, weil
    RapidOCR-Modelle Datendateien sind: ohne `--collect-all rapidocr_onnxruntime`
    würde der erste Sammel-ORDNER beim Nutzer fehlschlagen. Preis: das Sidecar ist
@@ -158,3 +160,28 @@ Anders als in der eigenständigen Version:
 Nachgewiesen am 23.11.2026: `pytest tests/test_beleg_sammelimport.py` 15 passed,
 gesamte Backend-Suite ohne neuen Fehler (vorher wie nachher ein bereits bekannter
 Schlüsselbund-Test), `npx tsc --noEmit` ohne Fehler.
+
+## 8. Noch am 23.11.2026: der Import bucht direkt ins Journal
+
+Die Seite war getestet, aber der Weg führte weiter über die CSV in den
+Bank-/CSV-Import. Gewünscht war ein zusätzlicher Knopf **nach dem Bearbeiten** –
+deshalb jetzt „Ins Journal buchen" direkt über der Liste.
+
+| Datei | Inhalt |
+|---|---|
+| `src/backend/api/beleg_sammelimport.py` | neuer Endpunkt `POST /buchen`: je Beleg ein `Journaleintrag` über `api/journal.py::create_eintrag` (Kategorie aus dem Aufwandskonto, USt/Vorsteuer, Nummernkreis, GoBD-Signatur, Lieferant aus den Stammdaten, Rechnungsnummer als `externe_belegnr`). Zusätzliche Helfer: `_geld` (Kommazahlen aus dem Formular), `_datum`, `_zahlungsart`, `_kategorien_lookup`, `_lieferanten_lookup`, `_bereits_gebucht` (Dublettenschutz ohne neue Tabelle) |
+| `src/frontend/src/pages/beleg-sammelimport/BelegSammelImportPage.tsx` | Knopf „Ins Journal buchen", Auswahl der Standard-Zahlungsart, Häkchen für Zeilen mit schiefer Summenprüfung, Zusammenfassung (gebucht/übersprungen/fehlgeschlagen, Summe, Gründe), Status-Badge je Zeile |
+| `src/frontend/src/api/client.ts` | `bucheBelege()` plus Typen `BelegBuchAntwort`/`BelegBuchErgebnis` |
+| `src/backend/tests/test_beleg_sammelimport.py` | 8 neue Tests (Felder des Journals, Dublettenschutz beim zweiten Klick, fehlendes Konto, schiefe Summen, Zahlungsart, Kommazahlen) |
+
+Wichtige Entscheidungen, damit nichts Halbes gebucht wird: Dubletten, fremde
+Währung, fehlendes Datum, fehlender Betrag, ein Sachkonto ohne Kategorie, Bar über
+dem Kassenstand und Zeilen mit schiefer Summenprüfung werden übersprungen und
+verständlich begründet; schon genauso gebuchte Zeilen werden am Datum, dem Betrag
+und der externen Belegnr erkannt. Eine eigene Herkunftstabelle (die das eleganter
+gelöst hätte) wäre eine Datenbank-Migration gewesen und wurde nicht angefasst.
+Das Werkzeug in diesem Ordner bleibt bei seiner CSV – es hat kein Journal.
+
+Nachgewiesen am 23.11.2026: `pytest tests/test_beleg_sammelimport.py` 23 passed,
+gesamte Backend-Suite 1440 passed / 1 bekannter Schlüsselbund-Test / 4 skipped,
+`npx tsc --noEmit` ohne Fehler.

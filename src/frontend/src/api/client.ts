@@ -3755,6 +3755,34 @@ export async function downloadBelegCsv(
   await _triggerBlobDownload(blob, match?.[1]?.trim() ?? `${dateiname}_buchungen.csv`)
 }
 
+export type BelegBuchErgebnis = {
+  index: number
+  status: 'gebucht' | 'uebersprungen' | 'fehlgeschlagen'
+  belegnr: string
+  begruendung: string
+  kategorie: string
+  zahlungsart: string
+  hinweis: string
+}
+
+export type BelegBuchAntwort = {
+  gebucht: number
+  uebersprungen: number
+  fehlgeschlagen: number
+  summe: string
+  ergebnisse: BelegBuchErgebnis[]
+}
+
+/** Die berichtigte Liste direkt ins Journal schreiben – ein Eintrag je Beleg, genau wie eine
+ *  von Hand erfasste Ausgabe (Kategorie, USt, Nummernkreis, GoBD-Signatur). `zahlungsart` ist
+ *  der Standard für Belege, auf denen selbst nichts dazu steht. */
+export const bucheBelege = (
+  zeilen: BelegZeile[], zahlungsart = 'Bank', auchOhnePruefung = false,
+) => request<BelegBuchAntwort>('/beleg-sammelimport/buchen', {
+  method: 'POST',
+  body: JSON.stringify({ zeilen, zahlungsart, auch_ohne_pruefung: auchOhnePruefung }),
+})
+
 /** Merkt ein Konto zu einem Lieferantennamen und gilt für alle künftigen PDFs mit diesem Namen. */
 export const merkBelegKonto = (name: string, sach: string, kreditor: string) =>
   request<{ gelernt: BelegGelernt[] }>('/beleg-sammelimport/merken', {
