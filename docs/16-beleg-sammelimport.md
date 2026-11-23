@@ -116,6 +116,16 @@ Die Liste zeigt nach dem Buchen pro Zeile „gebucht {Belegnr}", „nicht gebuch
 Anzahl und Summe. Journal, Monatsübersicht und Kassenstand werden im Frontend neu
 geladen.
 
+**Zeile löschen** (ebenfalls in der Liste): Zeilen, die nicht hierher gehören – ein
+Beleg für eine andere Firma, ein Rest, den die Erkennung falsch zusammengewürfelt
+hat – werden mit „löschen" aus der Liste genommen, nach Rückfrage mit Lieferant,
+Betrag und Seitenzahl. Das PDF, der OCR-Zwischenspeicher und das Journal bleiben unberührt; ist
+die Zeile vorher schon gebucht, sagt die Rückfrage, dass der Eintrag im Journal
+bestehen bleibt und dort storniert werden muss. Alles darunter rückt nach oben, die
+Rückmeldungen des Journals und die Zahlen der Zusammenfassung bleiben richtig.
+Dasselbe kann das Zusatz-Werkzeug schon länger („Zeile loeschen" in der
+Desktop-Oberfläche).
+
 ## Was (noch) nicht dazugehört
 
 - **Keine eigene Belegtabelle**: die Buchung erkennt Dubletten über das Journal

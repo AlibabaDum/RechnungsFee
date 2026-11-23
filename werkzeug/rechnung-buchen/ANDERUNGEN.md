@@ -170,7 +170,7 @@ deshalb jetzt „Ins Journal buchen" direkt über der Liste.
 | Datei | Inhalt |
 |---|---|
 | `src/backend/api/beleg_sammelimport.py` | neuer Endpunkt `POST /buchen`: je Beleg ein `Journaleintrag` über `api/journal.py::create_eintrag` (Kategorie aus dem Aufwandskonto, USt/Vorsteuer, Nummernkreis, GoBD-Signatur, Lieferant aus den Stammdaten, Rechnungsnummer als `externe_belegnr`). Zusätzliche Helfer: `_geld` (Kommazahlen aus dem Formular), `_datum`, `_zahlungsart`, `_kategorien_lookup`, `_lieferanten_lookup`, `_bereits_gebucht` (Dublettenschutz ohne neue Tabelle) |
-| `src/frontend/src/pages/beleg-sammelimport/BelegSammelImportPage.tsx` | Knopf „Ins Journal buchen", Auswahl der Standard-Zahlungsart, Häkchen für Zeilen mit schiefer Summenprüfung, Zusammenfassung (gebucht/übersprungen/fehlgeschlagen, Summe, Gründe), Status-Badge je Zeile |
+| `src/frontend/src/pages/beleg-sammelimport/BelegSammelImportPage.tsx` | Knopf „Ins Journal buchen", Auswahl der Standard-Zahlungsart, Häkchen für Zeilen mit schiefer Summenprüfung, Zusammenfassung (gebucht/übersprungen/fehlgeschlagen, Summe, Gründe), Status-Badge je Zeile und „löschen" je Zeile (wie „Zeile loeschen" in diesem Werkzeug) |
 | `src/frontend/src/api/client.ts` | `bucheBelege()` plus Typen `BelegBuchAntwort`/`BelegBuchErgebnis` |
 | `src/backend/tests/test_beleg_sammelimport.py` | 8 neue Tests (Felder des Journals, Dublettenschutz beim zweiten Klick, fehlendes Konto, schiefe Summen, Zahlungsart, Kommazahlen) |
 

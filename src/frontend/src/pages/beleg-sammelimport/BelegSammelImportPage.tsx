@@ -33,10 +33,17 @@ function dauerFmt(sekunden: number): string {
 }
 
 function geldFmt(wert: string | number): string {
-  const zahl = typeof wert === 'number' ? wert : Number(wert)
-  return Number.isFinite(zahl)
-    ? zahl.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    : String(wert)
+  const zahl = geldZahl(wert)
+  return zahl === null ? String(wert) : zahl.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+/** Betrag aus der Liste als Zahl – das Feld darf auch „119,00" aus dem Formular meinen. */
+function geldZahl(wert: string | number): number | null {
+  if (typeof wert === 'number') return Number.isFinite(wert) ? wert : null
+  const text = wert.trim()
+  if (!text) return null
+  const zahl = Number(text.includes(',') ? text.replace(/\./g, '').replace(',', '.') : text)
+  return Number.isFinite(zahl) ? zahl : null
 }
 
 /** Text der Texterkennung ist ungenau: Beträge dürfen nie stillschweigend stimmen. */
@@ -155,9 +162,53 @@ export function BelegSammelImportPage() {
     for (const e of buchAntwort?.ergebnisse ?? []) karte.set(e.index, e)
     return karte
   }, [buchAntwort])
+  // Zählung der Zusammenfassung aus der aktuellen Liste: nach dem Löschen einer Zeile
+  // stimmt sie wieder, ohne dass eine Zahl von Hand nachgetragen werden muss
+  const buchStatistik = useMemo(() => {
+    let gebucht = 0
+    let uebersprungen = 0
+    let fehlgeschlagen = 0
+    let summe = 0
+    for (const e of buchAntwort?.ergebnisse ?? []) {
+      if (e.status === 'uebersprungen') uebersprungen += 1
+      else if (e.status === 'fehlgeschlagen') fehlgeschlagen += 1
+      else {
+        gebucht += 1
+        const betrag = geldZahl(zeilen[e.index]?.brutto ?? '')
+        if (betrag !== null) summe += betrag
+      }
+    }
+    return { gebucht, uebersprungen, fehlgeschlagen, summe }
+  }, [buchAntwort, zeilen])
 
   function setzeFeld(zeile: number, feld: keyof BelegZeile, wert: unknown) {
     setZeilen(prev => prev.map((z, n) => (n === zeile ? { ...z, [feld]: wert } as BelegZeile : z)))
+  }
+
+  /** Zeile aus dieser Liste nehmen – das PDF, die erkannten Seiten und das Journal bleiben
+   *  unberührt. Was darunter steht rückt nach oben, also wandern die geöffnete Detailzeile
+   *  und die Rückmeldungen des Journals mit. */
+  function zeileLoeschen(zeile: number) {
+    const z = zeilen[zeile]
+    if (!z) return
+    const bereitsGebucht = buchungen.get(zeile)?.status === 'gebucht'
+    const betrag = z.brutto ? `${geldFmt(z.brutto)} €` : 'ohne Betrag'
+    if (!confirm(`Zeile ${zeile + 1} aus der Liste nehmen? `
+      + `(${z.lieferant || 'ohne Lieferant'}, ${betrag}, Seite ${z.seiten.join(', ')}.) `
+      + (bereitsGebucht
+        ? 'Der Eintrag im Journal bleibt bestehen und muss dort storniert werden. '
+        : '')
+      + 'Im PDF bleibt der Beleg unverändert enthalten.')) return
+    setZeilen(prev => prev.filter((_, n) => n !== zeile))
+    setGeoeffnet(prev => (prev === null ? null : prev === zeile ? null : prev > zeile ? prev - 1 : prev))
+    setBuchAntwort(prev => {
+      if (!prev) return prev
+      const ergebnisse = prev.ergebnisse
+        .filter(e => e.index !== zeile)
+        .map(e => (e.index > zeile ? { ...e, index: e.index - 1 } : e))
+      return { ...prev, ergebnisse }
+    })
+    setMeldung(`Zeile ${zeile + 1} ist aus der Liste genommen – sie wird weder gebucht noch steht sie in der CSV.`)
   }
 
   async function lesePdf(datei: File) {
@@ -413,10 +464,10 @@ export function BelegSammelImportPage() {
             <div className="mb-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 {[
-                  { label: 'gebucht', wert: String(buchAntwort.gebucht) },
-                  { label: 'übersprungen', wert: String(buchAntwort.uebersprungen) },
-                  { label: 'fehlgeschlagen', wert: String(buchAntwort.fehlgeschlagen) },
-                  { label: 'Summe gebucht', wert: `${geldFmt(buchAntwort.summe)} €` },
+                  { label: 'gebucht', wert: String(buchStatistik.gebucht) },
+                  { label: 'übersprungen', wert: String(buchStatistik.uebersprungen) },
+                  { label: 'fehlgeschlagen', wert: String(buchStatistik.fehlgeschlagen) },
+                  { label: 'Summe gebucht', wert: `${geldFmt(buchStatistik.summe)} €` },
                 ].map(k => (
                   <div key={k.label}>
                     <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">{k.label}</p>
@@ -443,6 +494,12 @@ export function BelegSammelImportPage() {
               </p>
             </div>
           )}
+
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+            Was korrigiert werden muss, wird in den Feldern berichtigt. Zeilen, die mit
+            „löschen" entfernt werden, fehlen danach in Journal und CSV – im PDF bleibt
+            der Beleg unverändert enthalten.
+          </p>
 
           <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-x-auto mb-6">
             <table className="w-full text-sm min-w-[1180px]">
@@ -548,14 +605,24 @@ export function BelegSammelImportPage() {
                         className="w-40 text-xs border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 px-1 py-1 text-slate-800 dark:text-slate-100"
                       />
                     </td>
-                    <td className="px-2 py-1">
-                      <button
-                        type="button"
-                        onClick={() => setGeoeffnet(geoeffnet === i ? null : i)}
-                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                      >
-                        {geoeffnet === i ? 'zu' : 'mehr'}
-                      </button>
+                    <td className="px-2 py-1 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setGeoeffnet(geoeffnet === i ? null : i)}
+                          className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                          {geoeffnet === i ? 'zu' : 'mehr'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => zeileLoeschen(i)}
+                          title="Nur aus dieser Liste entfernen – im PDF bleibt der Beleg enthalten und nichts wird gebucht."
+                          className="text-xs text-red-600 dark:text-red-400 hover:underline"
+                        >
+                          löschen
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
